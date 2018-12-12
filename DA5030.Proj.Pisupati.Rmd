@@ -1,0 +1,1279 @@
+---
+title: "Classification of Used Cars into Good and Bad Cars for a Refurbishing Company"
+author: "Aishwarya Pisupati"
+date: "December 3, 2018"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+## Business Problem: 
+
+### 1.One channel for car owners to sell their cars is at Auctions. These used cars are bought by retail consumers or by Used Car Refurbishing and Sale companies. 
+
+### 2.The business problem is set in thecontext of such a company. Usually, the company does not know whether a used car would make a profit or loss during the auction, but only after all the refurbishing cost is incurred and the car is sold. 
+
+### 3. Used Cars usually have an upper cap on reslae price 
+
+### 4. Our goal is to create a model that helps them to predict whethere a car sold at auction would be a profit or loss making car before purchasing it. 
+
+### 5.This classification exercise is based on the basic features of the cars that is avaibale at the time of the Auction. The model is built on the historic auction data compiled by the company  and shall be deployed at future auctions.
+
+### 6.As this is an exercise to avoid bad cars (Bad Cars = Positive Class = 1), we need an algorithm which avoids False Negatives the most to avoid loss, i.e which classifies bad cars as good. We need high sensitivity = TP/(TP+FN) = 1-FNrate. 
+
+### 7. However, we also do not want to fail to acquire profitable cars and hence a dcent specificity is also required with a lower preference.
+
+### 8. Therefore the final metrics that will be used for evaluation are : Overall Accuracy, Sensitivity and AUC.
+
+### Source of Data : https://www.kaggle.com/c/DontGetKicked/data
+
+### Link to the dataset being used: csv ile attached for submission
+
+
+### Feature Description and fundamental analysis - Understanding the predictors before modelling
+
+###### IsBadBuy - The response Variable - Whether the used car bought in an auction was bad(1) or good car(0)
+###### PurchDate - Date when the used car was bought in  an auction - Years of Usage of a car is a good predictor
+###### Auction - auction name - Auction sold at is also a good predictor if there are some systematic issues in a specific auction
+###### VehYear - Year of make - Age of car is a good predictor
+###### VehicleAge - Age of Car
+###### Make - Make/Brand - Manufacturer is a good predictor of quality of car
+###### Model - Model of the car 
+###### Trim - Version of the car
+###### SubModel - Sub version of the car
+###### Color - Colour of Car
+###### Transmission - Automatic/ Manual - The transmission system does affect the life span of a car
+###### WheelTypeID - Id for wheel type
+###### WheelType - Alloy/Cover Wheels - Wheel types affect the tyre size and hence the ride quality and life span
+###### VehOdo - Distance Travelled in Car - Distance travelled is a very good predictor
+###### Nationality - Manufacturer's Country - Whether imported or home made may have some influence 
+###### Size - Type of Car - A good predictor - Different quality standards are used for different sized cars
+###### VehBCost - Vehicle Original Cost of Purchase by First Owner - Original Cost is an indirect indicator of quality
+###### IsOnlineSale - Whether the Car was first purchased online - May affect the quality indirectly - Model will tell us more
+###### WarrantyCost - Warranty Price (term = 36 month  and mileage = 36k) - Higher the warranty cost, the lesser the expected quality
+
+## Overall Protocol
+
+###1. Data Cleaning and Transformation
+###2. Keep a hold out Test set aside for the final models selected
+###3. Split the remainig into Training and Validation Set - Validation set for fine tuning the model
+###4. Peform 10 fold cross validation on the fine tuned model
+###5. Select the final candidates
+###6. Test on the Hold Out Test Data Set
+###7. Deploy the final model(s)
+
+### Checking for packages
+
+```{r setup, include=FALSE}
+Install_And_Load <- function(Required_Packages)
+{
+    Remaining_Packages <- Required_Packages[!(Required_Packages %in% installed.packages()[,"Package"])];
+
+    if(length(Remaining_Packages)) 
+    {
+        install.packages(Remaining_Packages);
+    }
+    for(package_name in Required_Packages)
+    {
+        library(package_name,character.only=TRUE,quietly=TRUE);
+    }
+}
+Required_Packages=c("ggplot2","psych","moments","gridExtra","caret","C50","e1071","ROCR","klaR","kernlab");
+Install_And_Load(Required_Packages);
+
+
+```
+
+### Data Acquisition - from csv file
+
+```{r, echo=TRUE}
+rm(list=ls())
+raw.data <- read.csv("Project_Data.csv", header = T,stringsAsFactors = F )
+dim(raw.data)
+```
+
+
+
+### Feature Selection 1.0
+
+##### 1. Since Vehicle Age and Vehicle Year of manufature capture the same attribute differently, I shall drop Vehicle Year Column
+
+##### 2. To Minimise the dummy variables created by the categorical variables, I plan to only include the Make (33 levels) of the car and let go of sub make and sub version of the car
+
+##### 3. Wheel TypeID and Wheel Type capture the same information and WheelTypeId is being dropped
+
+##### 4. The Color variable has 17 levels and hence 16 dummy variables and is expected to add very little information to well being of car and hence is being dropped.
+
+
+```{r}
+
+dropped <- c("VehYear","Model","Trim","SubModel","WheelTypeID","Color")
+raw.data <- raw.data[,!(names(raw.data) %in% dropped)]
+dim(raw.data)
+prop.table(table(raw.data$IsBadBuy))
+
+```
+
+##### The first thing we observe is that the minority class holds 12.21% of the records. This lower represetation of this class makes training the models slightly complicated
+
+
+### Feature Transformation 1.0
+
+##### The Purchase Date variable shall be converted from date to year of purchase to minimise noise and make it a more meaninful categorical variable
+
+```{r}
+head(raw.data$PurchDate)
+```
+```{r}
+sub_year <- function(x){substr(x,nchar(x)-3,nchar(x))}
+raw.data$PurchDate <- unlist(lapply(raw.data[2],sub_year))
+colnames(raw.data)[2] <- "Year_of_Purchase"
+
+```
+
+### Distribution of Numeric Data
+
+```{r}
+par(mfrow = c(2,2))
+hist(raw.data$VehicleAge)
+hist(raw.data$VehOdo)
+hist(raw.data$VehBCost)
+hist(raw.data$WarrantyCost)
+
+```
+
+
+### Distribution of Categorical Data (Number of Levels)
+
+##### Make of Car
+```{r}
+table(raw.data$Make)
+length(table(raw.data$Make))
+```
+
+##### Auction Used Car was bought in 
+```{r}
+table(raw.data$Auction)
+```
+
+##### Wheel type of Car
+```{r}
+table(raw.data$WheelType)
+```
+
+#### Size of Car
+```{r}
+table(raw.data$Size)
+length(table(raw.data$Size))
+```
+
+### Summary of Interim Data
+```{r}
+summary(raw.data)
+raw.data <- raw.data[-which(raw.data$VehBCost == 1),]
+```
+
+### Analysis 1.0
+
+##### 1.Outliers : Vehicle BCost seems to be having outliers on the left and right. Warranty Cost seems to have outliers on right.
+##### 2.Nulls : Transmission Categorical Variable , Wheel Type Variable, Nationality and Size of car have NULL values
+##### 3.Corrupt Data : Trasnmission variable seems to have 2 counts of incorrect data which need to be corrected. One Records has VehicleBcost as 1$ which is absurd. It shall be deleted
+##### 4.Skewness : Vehicle Odometer reading seems to be skewed to the left and Warranty Costs seem to be skewed to the right
+##### 5.Normality : All the 4 numeric variables seem to be normally distributed, but shall be checked below
+
+
+
+### Data Imputation - NULL value Handling and Corrupt Data Handling
+
+##### As NULLs exist in Categorical Variables, we shall replace them with the mode of the data
+
+##### 1. Transmission - 8 NULLS, 2 Incorrect data
+```{r}
+table(raw.data$Transmission)
+raw.data$Transmission[which(raw.data$Transmission %in% c("NULL",""))] = "AUTO" 
+raw.data$Transmission[which(raw.data$Transmission %in% c("Manual"))] = "MANUAL"
+table(raw.data$Transmission)
+```
+
+##### 2. Wheel Type - 3174 NULLs
+```{r}
+table(raw.data$WheelType)
+raw.data$WheelType[which(raw.data$WheelType %in% c("NULL"))] = "Alloy" 
+table(raw.data$WheelType)
+```
+
+##### 3. Nationality - 5 NULLs
+```{r}
+table(raw.data$Nationality)
+raw.data$Nationality[which(raw.data$Nationality %in% c("NULL"))] = "AMERICAN" 
+table(raw.data$Nationality)
+```
+
+##### 4. Size - 5 NULLs
+```{r}
+table(raw.data$Size)
+raw.data$Size[which(raw.data$Size %in% c("NULL"))] = "MEDIUM" 
+table(raw.data$Size)
+```
+
+
+#### Converting categorical variables to factor variables
+```{r}
+raw.data <- as.data.frame(unclass(raw.data))
+class(raw.data$Year_of_Purchase)
+```
+
+#### Converting IsBadBuy and IsOnlineSale to factor variables
+```{r}
+raw.data$IsBadBuy <- as.factor(raw.data$IsBadBuy)
+raw.data$IsOnlineSale <- as.factor(raw.data$IsOnlineSale)
+str(raw.data)
+```
+
+
+#### We adjust for skewness before eliminating outliers to prevent loss of data
+
+### Skewness Handling 
+
+#### Skewness
+```{r}
+library(moments)
+skewness(raw.data$WarrantyCost)
+skewness(raw.data$VehBCost)
+skewness(raw.data$VehOdo)
+
+```
+
+#####1. The Warranty Cost is highly skewed to the right
+#####2. Vehicle Bcost is slightly skewed to the right
+#####3. Veicle Odometer reading is slightly skewed to the left
+
+##### I shall use the logarithm transformation to reduce skewness of Warranty Cost
+
+### Feature Transformation 2.0 - Logarithm to base 'e' of Warranty Cost
+```{r}
+raw.data$WarrantyCost <- log(raw.data$WarrantyCost)
+## Revised Skewness of Warranty Cost
+skewness(raw.data$WarrantyCost)
+
+```
+
+
+### Outlier Detection and Handling
+
+##### The norm is that the points that are 3 standard deviations away from the mean are deemed to be outliers. 
+
+##### Visualizing the numeric data for outliers
+
+```{r}
+library(ggplot2)
+library(gridExtra)
+plot1 <- ggplot(raw.data, aes(x = raw.data$VehBCost, y = raw.data$WarrantyCost)) + geom_point()
+plot2 <- ggplot(raw.data, aes(x = raw.data$VehOdo, y = raw.data$WarrantyCost)) + geom_point()
+grid.arrange(plot1, plot2, nrow = 1)
+
+```
+
+### Identifying Outliers
+
+##### Odometer Reading Outliers - 1 outlier - Row number 40450
+```{r}
+Odo_z <- (raw.data$VehOdo-mean(raw.data$VehOdo))/sd(raw.data$VehOdo)
+which(Odo_z > 3)
+```
+
+##### Original Acquisition Cost Outliers - 45 outliers
+```{r}
+BCost_z <- (raw.data$VehBCost-mean(raw.data$VehBCost))/sd(raw.data$VehBCost)
+which(BCost_z > 3)
+```
+
+##### Warranty Cost Outliers - 390 outlier 
+```{r}
+Warranty_z <- (raw.data$WarrantyCost-mean(raw.data$WarrantyCost))/sd(raw.data$WarrantyCost)
+length(which(Warranty_z > 3))
+```
+
+##### Before we remove the outliers we need to check the damage to the data diversity they might do if they are removed
+
+```{r}
+outliers_index <- unique(c(which(Odo_z > 3),which(BCost_z > 3),which(Warranty_z > 3)))
+length(outliers_index)
+
+```
+
+##### Outliers Distribution of Dependant Variable 
+```{r}
+outliers <- raw.data[outliers_index,]
+table(outliers$IsBadBuy)
+prop.table(table(outliers$IsBadBuy))*100
+```
+
+##### Whole Data Distribution of Dependant Variable
+```{r}
+table(raw.data$IsBadBuy)
+prop.table(table(raw.data$IsBadBuy))*100
+```
+
+##### If all the outliers are removed we will be losing 114 out of the 8796 Bad Car Category data which is 1.2% of the category. Assuming it does not essentially cause loss of information we remove the outliers.
+##### We shall remove the outliers from the data
+
+```{r}
+raw.data <- raw.data[-outliers_index,]
+summary(raw.data)
+
+```
+
+### Normality 
+
+#####Checking Normality of Numeric Data - Shapiro Test , Density Plot and qq plot
+
+```{r}
+
+shapiro.test(sample(raw.data$VehOdo,5000))
+shapiro.test(sample(raw.data$VehBCost,5000))
+shapiro.test(sample(raw.data$WarrantyCost,5000))
+```
+
+```{r}
+par(mfrow = c(1,3))
+plot(density(raw.data$VehOdo))
+plot(density(raw.data$VehBCost))
+plot(density(raw.data$WarrantyCost))
+
+```
+```{r}
+
+par(mfrow = c(1,3))
+qqnorm(raw.data$VehOdo);qqline(raw.data$VehOdo, col = 2)
+qqnorm(raw.data$VehBCost);qqline(raw.data$VehBCost, col = 2)
+qqnorm(raw.data$WarrantyCost);qqline(raw.data$WarrantyCost, col = 2)
+
+```
+
+
+##### Based on Density Curves and QQ plots the numeric variables are not normaly distributed
+##### Moreover based on the p-values of the Shapiro Test we can reject the null hypothesis and the numeric variables are not normally distributed
+
+
+### Correlation Plots of Numeric Variables 
+
+##### Check for applicability of Principal Component Analysis on numeric features
+##### The pairwise correlations between the numeric variables are on the lower side 
+##### Not a really strong case to convert them to Principal Components especially when there are only 4 explicit numeric variables in the mix . But we shall check the implementation anyways
+
+```{r}
+
+library(psych)
+pairs.panels(raw.data[c(1,4,8,11,13)])
+
+```
+
+##### Based on the above plot, we also find that there is very little linear realtionship between features and the dependant variable indicating that these features are not linearly extremely strong features to predict the classification
+
+
+
+### Principal Component Analysis Feasibility
+
+```{r}
+
+pcomps <- princomp(raw.data[,c(4,8,11,13)], scores = T, cor = T)
+loadings(pcomps)
+```
+
+##### As seen above there is no scope of applicability of PCA on the 4 numeric variables in the mix as the variance explained by each of the component is nearly the same and evely spread out. This can also be verified by the plot of eigen values
+
+```{r}
+plot(pcomps)
+```
+
+##### Almost all Principal Components have eigen values near or below 1 and hence we shall not be using Principal Componenets going forward.
+
+
+
+### Normalizing the Numeric Variables using Min Max Normalization
+
+```{r}
+normalize = function(x){return ((x-min(x))/(max(x)-min(x)))}
+
+raw.data$VehicleAge <- unlist(lapply(raw.data[4],normalize))
+raw.data$VehOdo <- unlist(lapply(raw.data[8],normalize))
+raw.data$VehBCost <- unlist(lapply(raw.data[11],normalize))
+raw.data$WarrantyCost <- unlist(lapply(raw.data[13],normalize))
+
+```
+
+
+### Summary of Interim Data 2.0
+
+```{r}
+summary(raw.data)
+str(raw.data)
+```
+
+## Creating a Hold Out Test Set
+
+```{r}
+
+index_hold <- sample(nrow(raw.data),5000)
+hold_test.data <- raw.data[index_hold,]
+raw.data <- raw.data[-index_hold,]
+str(raw.data)
+
+```
+
+
+
+
+### Deploying Algorithms
+
+
+#####1. Classification Tree
+#####2. Logistic Regression
+#####3. Naive Bayes Classification
+#####4. Support Vector Machines
+
+
+
+## Classification Tree
+
+##### We found that due to lack of sufficient proportion of the minority class , the model was performing poorly below a cretain proportion of minority class. As the minority class is only 12% of the data, I undersampled the majority class. 
+
+
+##### Undersampling Majority Class
+```{r}
+
+majority <- subset(raw.data, IsBadBuy == 0)
+minority <- subset(raw.data, IsBadBuy == 1)
+set.seed(3248)
+tree.data <- rbind(minority, majority[sample(nrow(majority),30000),])
+
+```
+
+##### Splitting data into Training and Validation Set
+```{r}
+library(caret)
+set.seed(3456)
+index<- createDataPartition(tree.data$IsBadBuy, p = 0.8 , list = FALSE , times = 1)
+tree_train<-tree.data[index,]
+tree_test<-tree.data[-index,]
+```
+
+
+##### Training the model on Training Set
+```{r}
+library(C50)
+tree_model <- C5.0(tree_train[,-1],tree_train$IsBadBuy, trials = 1)
+tree_model
+plot(tree_model)
+```
+
+##### Testing the model on Validation Set
+```{r}
+tree_pred <- predict(tree_model, tree_test)
+```
+
+##### Decision Tree Model Accuracy
+```{r}
+library(e1071)
+confusionMatrix ((tree_pred),(tree_test$IsBadBuy), positive = "1" )
+```
+
+
+##### Decision Tree Model Performance - AUC 
+```{r}
+library(ROCR)
+tree_pred <- prediction (predictions = as.numeric(tree_pred), labels = as.numeric(tree_test$IsBadBuy))
+tree_perf <- performance(tree_pred,measure = "tpr", x.measure = "fpr")
+plot(tree_perf, main = "ROC Curve for Decision Tree Classification" , col = "blue", lwd = 2)
+abline(a=0, b=1, lwd = 1, lty = 2)
+```
+
+##### Decision Tree - AUC Value
+```{r}
+tree_perf.auc <- performance(tree_pred,measure = "auc")
+unlist(tree_perf.auc@y.values)
+```
+
+
+## Fine Tuning Classification Tree - Boosting the accuracy by adding 10 trials to the algorithms
+
+```{r}
+
+#### Undersampling Majority Class
+majority <- subset(raw.data, IsBadBuy == 0)
+minority <- subset(raw.data, IsBadBuy == 1)
+set.seed(3248)
+tree.data <- rbind(minority, majority[sample(nrow(majority),30000),])
+```
+
+##### Training the model on Training Set
+```{r}
+library(caret)
+set.seed(3456)
+index<- createDataPartition(tree.data$IsBadBuy, p = 0.8 , list = FALSE , times = 1)
+tree_train<-tree.data[index,]
+tree_test<-tree.data[-index,]
+
+library(C50)
+tree_model <- C5.0(tree_train[,-1],tree_train$IsBadBuy, trials = 10)
+tree_model
+
+
+```
+
+##### Testing the model on Validation Set
+```{r}
+tree_prediction <- predict(tree_model, tree_test)
+```
+
+##### Decision Tree Model Accuracy
+```{r}
+confusionMatrix ((tree_prediction),(tree_test$IsBadBuy), positive = "1" )
+```
+
+
+
+##### Decision Tree Model Performance - AUC 
+```{r}
+library(ROCR)
+tree_pred <- prediction (predictions = as.numeric(tree_prediction), labels = as.numeric(tree_test$IsBadBuy))
+tree_perf <- performance(tree_pred,measure = "tpr", x.measure = "fpr")
+plot(tree_perf, main = "ROC Curve for Tuned Decision Tree Classification (Trials = 10)" , col = "blue", lwd = 2)
+abline(a=0, b=1, lwd = 1, lty = 2)
+```
+
+##### Decision Tree - AUC Value
+```{r}
+tree_perf.auc <- performance(tree_pred,measure = "auc")
+unlist(tree_perf.auc@y.values)
+
+```
+
+
+## Applying 10-fold Cross Validation to Classification Tree to check for partition bias
+
+```{r}
+
+#### Undersampling Majority Class
+majority <- subset(raw.data, IsBadBuy == 0)
+minority <- subset(raw.data, IsBadBuy == 1)
+set.seed(3248)
+tree.data <- rbind(minority, majority[sample(nrow(majority),30000),])
+```
+
+##### Creating 10 fold and Deploying the model
+
+##### The model shall return absolute accuracy and AUC value
+
+```{r}
+
+library(caret)
+set.seed(123)
+
+tree_folds <- createFolds(tree.data$IsBadBuy, k = 10)
+library(C50)
+tree_results <- lapply(tree_folds, function(x){
+
+tree_k_train <- tree.data[-x,]
+tree_k_test <- tree.data[x,]
+tree_k_model <- C5.0(IsBadBuy ~ ., data = tree_k_train, trials = 10 )
+tree_k_prediction <- predict(tree_k_model, tree_k_test)
+tree_actuals <- tree_k_test$IsBadBuy
+  
+library(ROCR)
+tree_k_pred <- prediction (predictions = as.numeric(tree_k_prediction), labels = as.numeric(tree_actuals))
+tree_k_perf.auc <- performance(tree_k_pred,measure = "auc")
+tree_auc <- unlist(tree_k_perf.auc@y.values)
+return(tree_auc)
+})
+  
+
+```
+
+##### List of Classification Tree AUC values from 10 fold cross validation
+
+```{r}
+str(tree_results)
+```
+
+##### Average Classification Tree AUC
+```{r}
+mean(unlist(tree_results))
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## Logistic Regression
+
+
+### Feature Engineering - Creation of Dummy Variables
+
+##### As categorical variables cannot be direct inputs into regression, dummy variables need to be created for the categorical variables. For a variable with n levels n-1 variables are craeted
+
+#### After all the transformation, the data frame presently has 58 variables
+
+```{r}
+
+reg.data <- raw.data
+
+reg.data_final <- as.data.frame(unlist(model.matrix(~ IsBadBuy+Year_of_Purchase+Auction+VehicleAge+Make+Transmission+WheelType+VehOdo+Nationality+Size+VehBCost+IsOnlineSale+WarrantyCost, data = reg.data  )))
+
+# Removing Intercept column
+
+reg.data_final  <- reg.data_final[-1]
+str(reg.data_final)
+
+```
+
+
+#### Partition data into training and validation set
+
+```{r}
+
+library(caret)
+set.seed(4567)
+index<- createDataPartition(reg.data_final$IsBadBuy1, p = 0.7 , list = FALSE , times = 1)
+lreg_train<-reg.data_final[index,]
+lreg_test<-reg.data_final[-index,]
+```
+
+
+#### Training the model
+
+```{r}
+lreg_model <- glm(IsBadBuy1 ~ .,  data = lreg_train , family = binomial)
+summary(lreg_model)
+
+```
+
+
+
+## Fine Tuning the Model 
+
+#### Using step wise backward elimination to remove non significant variables in decresing order of p-value and running the model iteratively. Reduced the number of predictors from 57 to 25
+
+
+```{r}
+lreg_model1 <- glm(IsBadBuy1 ~ Year_of_Purchase2010 + AuctionMANHEIM + 
+    AuctionOTHER + VehicleAge + MakeCHRYSLER + MakeHYUNDAI + 
+    MakeISUZU + MakeJEEP + MakeKIA + MakeLINCOLN + MakeMITSUBISHI + 
+    MakeNISSAN + TransmissionMANUAL + WheelTypeCovers + WheelTypeSpecial + 
+    VehOdo + `NationalityOTHER ASIAN` + SizeCROSSOVER + SizeLARGE + 
+    `SizeLARGE SUV` + SizeMEDIUM + `SizeSMALL SUV` + `SizeSMALL TRUCK` + 
+    SizeVAN + VehBCost, data = lreg_train,family = binomial)
+
+summary(lreg_model1)
+
+
+```
+
+### Observations Based on the Model: 
+
+###1. 2010 year of purchase has a positive correlation with bad cars
+###2. Manheim Auction has a negative correlation with bad cars and is more trustworthy
+###3. Older Age of Car has a positive Correlation with bad cars
+###4. A few MAkes have a positive correlation and a few makes have a negative correlation with Bad Cars
+###5. Manual Transmission has a negative correlation with Bad Cars
+###6. A few sizes and Nationalities have a correlation with Bad Cars
+###7. As expected as per Original Vehicle Acquisiton Cost , costlier car has better quality 
+
+
+## Testing the model
+
+#### The cutoff value of probability has been iteratively set at 0.15 to balance sensitivity and speficity when testing the model on the Validation Set
+
+```{r}
+
+
+lreg_prediction <- predict(lreg_model1, lreg_test , type = "response")
+lreg_prediction <- ifelse(lreg_prediction > 0.15,1,0)
+
+```
+
+
+
+### Logistic Regression Model Accuracy
+```{r}
+
+confusionMatrix (as.factor(lreg_prediction),(as.factor(lreg_test$IsBadBuy1)), positive = "1" )
+
+```
+
+
+
+#### Logistic Regression Model Performance - AUC 
+```{r}
+library(ROCR)
+lreg_pred <- prediction (predictions = as.numeric(lreg_prediction), labels = as.numeric(lreg_test$IsBadBuy1))
+lreg_perf <- performance(lreg_pred,measure = "tpr", x.measure = "fpr")
+plot(lreg_perf, main = "ROC Curve for Fine Tuned Logistic Regression Classification" , col = "blue", lwd = 2)
+abline(a=0, b=1, lwd = 1, lty = 2)
+
+```
+
+#### Logistic Regression - AUC Value
+```{r}
+lreg_perf.auc <- performance(lreg_pred,measure = "auc")
+unlist(lreg_perf.auc@y.values)
+
+```
+
+
+
+
+
+## Applying 10-fold Cross Validation on Logistic Regression model to check for random partition bias
+
+
+```{r, warning=FALSE, message=FALSE}
+
+
+library(caret)
+set.seed(4567)
+
+lreg_folds <- createFolds(reg.data_final$IsBadBuy1, k = 10)
+
+lreg_results <- lapply(lreg_folds, function(x){
+
+lreg_k_train <- reg.data_final[-x,]
+lreg_k_test <- reg.data_final[x,]
+
+lreg_k_model <- glm(IsBadBuy1 ~ Year_of_Purchase2010 + AuctionMANHEIM + 
+    AuctionOTHER + VehicleAge + MakeCHRYSLER + MakeHYUNDAI + 
+    MakeISUZU + MakeJEEP + MakeKIA + MakeLINCOLN + MakeMITSUBISHI + 
+    MakeNISSAN + TransmissionMANUAL + WheelTypeCovers + WheelTypeSpecial + 
+    VehOdo + `NationalityOTHER ASIAN` + SizeCROSSOVER + SizeLARGE + 
+    `SizeLARGE SUV` + SizeMEDIUM + `SizeSMALL SUV` + `SizeSMALL TRUCK` + 
+    SizeVAN + VehBCost, data = lreg_k_train,family = binomial)
+
+
+lreg_k_pred <- predict(lreg_k_model,lreg_k_test, type = "response")
+lreg_k_prediction <- ifelse(lreg_k_pred > 0.15,1,0)
+lreg_actuals <- lreg_k_test$IsBadBuy1
+  
+library(ROCR)
+lreg_k_pred <- prediction (predictions = as.numeric(lreg_k_prediction), labels = as.numeric(lreg_actuals))
+lreg_k_perf.auc <- performance(lreg_k_pred,measure = "auc")
+lreg_auc <- unlist(lreg_k_perf.auc@y.values)
+return(lreg_auc)
+})
+  
+
+```
+
+##### List of Logistic Regression - AUC values from 10 fold cross validation
+
+```{r}
+str(lreg_results)
+```
+
+##### Average Logistic Regression AUC
+```{r}
+mean(unlist(lreg_results))
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## Naive Bayes Classification
+
+```{r , warning=FALSE, message=FALSE}
+
+bayes.data <- raw.data
+
+## Partition data
+
+library(caret)
+set.seed(3246)
+index<- createDataPartition(bayes.data$IsBadBuy, p = 0.8 , list = FALSE , times = 1)
+bayes_train<-bayes.data[index,]
+bayes_test<-bayes.data[-index,]
+```
+
+
+##### Training  Naive Bayes on Training Set
+```{r, warning=FALSE, message=FALSE}
+#install.packages("klaR")
+library(klaR)
+nbmodel <- NaiveBayes(IsBadBuy~., data=bayes_train)
+```
+
+##### Testing Model on Test Set
+```{r, warning=FALSE, message=FALSE}
+nb_prediction <- predict(nbmodel, bayes_test[,-1])
+```
+
+##### Naive Bayes Model Accuracy
+```{r}
+confusionMatrix (nb_prediction$class,(as.factor(bayes_test$IsBadBuy)), positive = "1" )
+```
+
+##### Naive Bayes Model Performance - AUC 
+```{r}
+library(ROCR)
+nb_pred <- prediction (predictions = as.numeric(nb_prediction$class), labels = as.numeric(bayes_test$IsBadBuy))
+nb_perf <- performance(nb_pred,measure = "tpr", x.measure = "fpr")
+plot(nb_perf, main = "ROC Curve for Naive Bayes Classification" , col = "blue", lwd = 2)
+abline(a=0, b=1, lwd = 1, lty = 2)
+```
+
+##### Naive Bayes - AUC Value
+```{r}
+nb_perf.auc <- performance(nb_pred,measure = "auc")
+unlist(nb_perf.auc@y.values)
+
+```
+
+
+
+## Applying 10-fold Cross Validation on Naive Bayes Classifier to check for random partition bias
+
+```{r}
+
+bayes.data <- raw.data
+
+```
+
+##### Creating 10 folds and Deploying the model
+
+##### The model shall return absolute accuracy and AUC value
+
+```{r, warning=FALSE, message=FALSE}
+
+
+library(caret)
+set.seed(3246)
+
+nb_folds <- createFolds(bayes.data$IsBadBuy, k = 10)
+library(klaR)
+nb_results <- lapply(nb_folds, function(x){
+
+nb_k_train <- bayes.data[-x,]
+nb_k_test <- bayes.data[x,]
+nb_k_model <- NaiveBayes(IsBadBuy ~ ., data = nb_k_train )
+nb_k_pred <- predict(nb_k_model, nb_k_test[,-1])
+nb_actuals <- nb_k_test$IsBadBuy
+  
+library(ROCR)
+nb_k_pred <- prediction (predictions = as.numeric(nb_k_pred$class), labels = as.numeric(nb_actuals))
+nb_k_perf.auc <- performance(nb_k_pred,measure = "auc")
+nb_auc <- unlist(nb_k_perf.auc@y.values)
+return(nb_auc)
+})
+  
+
+```
+
+##### List of Naive Bayes - AUC values from 10 fold cross validation
+
+```{r}
+str(nb_results)
+```
+
+##### Average Naive Bayes AUC
+```{r}
+mean(unlist(nb_results))
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## Support Vector Machines
+
+##### SVM is a computationally demanding algorithm and requires sufficient proportion of Minority Class for the classifier to build a good model. As the minority class is only 12% of the data, we shall undersample the majority class to ensure a 60:40 ratio of the classes
+
+#### Using Vanilladot Kernel with C = 1
+
+##### Training The Model on Training Set
+
+```{r}
+
+## Undersampling Majority Class
+
+set.seed(1234)
+majority <- subset(raw.data, IsBadBuy == 0)
+minority <- subset(raw.data, IsBadBuy == 1)
+svm.data <- rbind(minority, majority[sample(nrow(majority),20000),])
+
+## Training The Model
+
+library(caret)
+set.seed(3456)
+index<- createDataPartition(svm.data$IsBadBuy, p = 0.5 , list = FALSE , times = 1)
+data_train<-svm.data[index,]
+data_test<-svm.data[-index,]
+
+## Deploying model
+
+library(kernlab)
+svm_model <- ksvm( IsBadBuy ~ ., data = data_train, kernel = "vanilladot", C = 1)
+svm_model
+```
+
+##### Testing  the Model on Test Set
+```{r}
+svm_predictions <- predict(svm_model, data_test)
+```
+
+##### Model Performance - Accuracy
+```{r}
+library(e1071)
+confusionMatrix ((svm_predictions),(data_test$IsBadBuy), positive = "1" )
+```
+
+##### Model Performance - AUC 
+```{r}
+library(ROCR)
+svm_pred <- prediction (predictions = as.numeric(svm_predictions), labels = as.numeric(data_test$IsBadBuy))
+svm_perf <- performance(svm_pred,measure = "tpr", x.measure = "fpr")
+plot(svm_perf, main = "ROC Curve for SVM - Vanilladot Classification" , col = "red", lwd = 2)
+abline(a=0, b=1, lwd = 1, lty = 2)
+```
+
+##### SVM - Vanilladot - AUC Value
+```{r}
+svm_perf.auc <- performance(svm_pred,measure = "auc")
+unlist(svm_perf.auc@y.values)
+
+```
+
+
+##### Vanilladot kernel generated poor results. Hence a non linear kernel Gaussian RBF has been deployed
+##### Changes in C value in the range of 1-100 made the algorithm computationally intensive. A C value of 30 has been finalised ehich generated better results
+
+### Fine Tuning SVM - Using RBFdot Kernel with C = 30
+
+```{r}
+
+## Undersampling Majority Class
+
+set.seed(1234)
+majority <- subset(raw.data, IsBadBuy == 0)
+minority <- subset(raw.data, IsBadBuy == 1)
+svm.data <- rbind(minority, majority[sample(nrow(majority),20000),])
+
+## Training The Model on Training Set
+
+library(caret)
+set.seed(3456)
+index<- createDataPartition(svm.data$IsBadBuy, p = 0.5 , list = FALSE , times = 1)
+data_train<-svm.data[index,]
+data_test<-svm.data[-index,]
+
+## Deploying Model
+
+library(kernlab)
+svm_model <- ksvm( IsBadBuy ~ ., data = data_train, kernel = "rbfdot", C = 30)
+svm_model
+```
+
+##### Testing the Model on Test set
+```{r}
+svm_predictions <- predict(svm_model, data_test)
+
+
+
+```
+
+##### Model Performance - Accuracy
+```{r}
+library(e1071)
+confusionMatrix ((svm_predictions),(data_test$IsBadBuy), positive = "1" )
+```
+
+##### Model Performance - AUC 
+```{r}
+library(ROCR)
+svm_pred <- prediction (predictions = as.numeric(svm_predictions), labels = as.numeric(data_test$IsBadBuy))
+svm_perf <- performance(svm_pred,measure = "tpr", x.measure = "fpr")
+plot(svm_perf, main = "ROC Curve for SVM -  RBFdot Classification" , col = "blue", lwd = 2)
+abline(a=0, b=1, lwd = 1, lty = 2)
+```
+
+#### SVM - AUC Value
+```{r}
+svm_perf.auc <- performance(svm_pred,measure = "auc")
+unlist(svm_perf.auc@y.values)
+
+```
+
+## Applying 2-fold Cross Validation to Support Vector Machines to check for random partition bias
+
+##### Only 2 fold as it was coputationally very intensive
+
+```{r}
+
+## Undersampling Majority Class
+
+set.seed(1234)
+majority <- subset(raw.data, IsBadBuy == 0)
+minority <- subset(raw.data, IsBadBuy == 1)
+svm.data <- rbind(minority, majority[sample(nrow(majority),20000),])
+
+library(caret)
+svm_folds <- createFolds(svm.data$IsBadBuy, k = 2)
+library(kernlab)
+svm_results <- lapply(svm_folds, function(x){
+
+svm_k_train <- svm.data[-x,]
+svm_k_test <- svm.data[x,]
+svm_k_model <- ksvm(IsBadBuy ~ ., data = svm_k_train, kernel = "rbfdot", C = 30 )
+svm_k_pred <- predict(svm_k_model, svm_k_test)
+svm_actuals <- svm_k_test$IsBadBuy
+  
+library(ROCR)
+svm_k_pred <- prediction (predictions = as.numeric(svm_k_pred), labels = as.numeric(svm_actuals))
+svm_k_perf.auc <- performance(svm_k_pred,measure = "auc")
+svm_auc <- unlist(svm_k_perf.auc@y.values)
+return(svm_auc)
+})
+
+```
+##### List of SVM - AUC values from 2 fold cross validation
+
+```{r}
+str(svm_results)
+```
+
+##### Average SVM - AUC
+```{r}
+mean(unlist(svm_results))
+
+```
+
+
+
+
+
+
+
+
+
+
+## Testing Models on Hold Out Test Set
+
+#### Based on the above results of the models on the Validation Set and verified by Cross Validation, there are 3 models that are under consideration to be verified on Hold Out Test Set
+
+### 1. Logistic Regression - Fine Tuned - Highest Sensitivity(0.515) and AUC (0.634)
+### 2. Naive Bayes - Highest Accuracy (86.70%)
+### 3. RBFdot SVM - Decent Sensitivity (0.253) and AUC (0.581) compared to other rejected models
+
+
+## Logistic Regression
+
+```{r}
+
+# Creaing Dummy Variables
+
+hold_test.data_final <- as.data.frame(unlist(model.matrix(~ IsBadBuy+Year_of_Purchase+Auction+VehicleAge+Make+Transmission+WheelType+VehOdo+Nationality+Size+VehBCost+IsOnlineSale+WarrantyCost, data = hold_test.data  )))
+
+# Removing Intercept column
+
+hold_test.data_final  <- hold_test.data_final[-1]
+
+# Testing Model
+lreg_prediction1 <- predict(lreg_model1, hold_test.data_final , type = "response")
+lreg_prediction1 <- ifelse(lreg_prediction1 > 0.15,1,0)
+
+```
+
+#### Accuracy
+```{r}
+confusionMatrix (as.factor(lreg_prediction1),(as.factor(hold_test.data_final$IsBadBuy1)), positive = "1" )
+
+```
+
+
+#### Model Performance - AUC 
+```{r}
+library(ROCR)
+lreg_pred1 <- prediction (predictions = as.numeric(lreg_prediction1), labels = as.numeric(hold_test.data_final$IsBadBuy1))
+lreg_perf1 <- performance(lreg_pred1,measure = "tpr", x.measure = "fpr")
+plot(lreg_perf1, main = "ROC Curve for Logistic Regression  on Holdout Test Set " , col = "blue", lwd = 2)
+abline(a=0, b=1, lwd = 1, lty = 2)
+
+```
+
+#### AUC Value
+```{r}
+lreg_perf1.auc <- performance(lreg_pred1,measure = "auc")
+unlist(lreg_perf1.auc@y.values)
+
+```
+
+
+
+
+## Naive Bayes
+```{r, warning=FALSE, message= FALSE}
+nb_prediction1 <- predict(nbmodel, hold_test.data[,-1])
+
+```
+
+
+#### Accuracy
+```{r}
+confusionMatrix (nb_prediction1$class,(as.factor(hold_test.data$IsBadBuy)), positive = "1" )
+```
+
+
+#### Model Performance - AUC 
+```{r}
+library(ROCR)
+nb_pred1 <- prediction (predictions = as.numeric(nb_prediction1$class), labels = as.numeric(hold_test.data$IsBadBuy))
+nb_perf1 <- performance(nb_pred1,measure = "tpr", x.measure = "fpr")
+plot(nb_perf1, main = "ROC Curve for Naive Bayes on Hold Out Test Set" , col = "blue", lwd = 2)
+abline(a=0, b=1, lwd = 1, lty = 2)
+```
+
+#### Naive Bayes - AUC Value
+```{r}
+nb_perf1.auc <- performance(nb_pred1,measure = "auc")
+unlist(nb_perf1.auc@y.values)
+
+```
+
+
+## SVM - RBFdot
+
+```{r}
+svm_predictions1 <- predict(svm_model, hold_test.data)
+
+```
+
+#### Accuracy
+```{r}
+library(e1071)
+confusionMatrix ((svm_predictions1),(hold_test.data$IsBadBuy), positive = "1" )
+```
+
+#### Model Performance - AUC 
+```{r}
+library(ROCR)
+svm_pred1 <- prediction (predictions = as.numeric(svm_predictions1), labels = as.numeric(hold_test.data$IsBadBuy))
+svm_perf1 <- performance(svm_pred1,measure = "tpr", x.measure = "fpr")
+plot(svm_perf1, main = "ROC Curve for SVM -  RBFdot on RBF Hold Out Set" , col = "blue", lwd = 2)
+abline(a=0, b=1, lwd = 1, lty = 2)
+```
+
+#### SVM - AUC Value
+```{r}
+svm_perf1.auc <- performance(svm_pred1,measure = "auc")
+unlist(svm_perf1.auc@y.values)
+
+```
+
+
+
+
+
+
+
+## Based on the Performance of the Three models on the Hold Out Test Data Set, Logistic Regression to be deployed
+###- It has good sensitivity score which enables fewer bad cars to be selected and avoiding Losses on them
+###- Highest AUC
+###- Decent Accuracy
+###- Decent Specificity to not let go of Profit making cars
+
+
+## Ensemble
+### Alternately, we can deploy all three models and the final call can be based on a majority rule of the three classifications.
+
+##GUI can be added to the Models and transferred to the Client as a product to be used at new auctions
+
+## All Models to be retrained on an Annual Basis and Redeployed based on new results
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
